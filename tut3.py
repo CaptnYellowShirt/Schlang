@@ -2,13 +2,13 @@
 """
 Schlangenaufbewahrungsbehälter - v0.1
 
-aka: Schlang - A Deliberately Non-Object-Oriented Python Interface to COMEDI 
+aka: Schlang - A Deliberately Non-Object-Oriented Python Interface to COMEDI
 
-COMEDI datatypes and functions are replicated though this interface using 
-the Python ctypes library. This allows the user to interface directly with 
-comedi-lib though the comfrotable interface of a Python interpreter. 
+COMEDI datatypes and functions are replicated though this interface using
+the Python ctypes library. This allows the user to interface directly with
+comedi-lib though the comfortable interface of a Python interpreter.
 Object-Orientation of the interface is deliberately not provided so the coding
-style will losely mimic C -- in this way, Schlang can be used to protype and 
+style will loosely mimic C -- in this way, Schlang can be used to prototype and
 debug complex programs that will later be written in C.
 
 Copyright 2013, Brandon J. Dillon <bdillon@vt.edu>
@@ -148,9 +148,9 @@ def main():
         
         for i in range(ret / bytes_per_sample):
             if (subdev_flags & SDF_LSAMPL):
-                raw = lsampl_t(ord(buf[i])) 
+                raw = cast(buf, POINTER(lsampl_t))[i] 
             else:
-                raw = lsampl_t(ord(buf[i])) #??? long vs short
+                raw = cast(buf, POINTER(sampl_t))[i]
                 
             print_datum(raw, col)
             col += 1
