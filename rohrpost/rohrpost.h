@@ -7,7 +7,7 @@
 
 /* tubeStatus Flags */
 #define TUBE_INPLACE    0x001     /* Tube has been created */
-#define TUBE_ACTIVE     0b002     /* Tube has passed data */
+#define TUBE_ACTIVE     0x002     /* Tube has passed data */
 #define TUBE_WAIT       0x004     /* Tube is waiting for data to appear at mouth or has been paused */
 #define TUBE_FAILED     0x008     /* Tube has thrown an unrecoverable error - check for rats */
 #define TUBE_EXIT       0x010     /* Tube has sucessuflly exited - congrats */
