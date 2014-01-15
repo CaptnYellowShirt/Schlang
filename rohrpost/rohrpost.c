@@ -164,21 +164,31 @@ void *_laytube_toFile(void *args){
         pause_after = sendingStation.firstByte + comedi_get_buffer_contents(pTube->dev, pTube->subdev) - 1;
 
         if (pause_after < sendingStation.address){
-            pTube->bytesMoved = receivingStation.address - receivingStation.firstByte;
-            /* comedi_poll(pTube->dev, pTube->subdev)); */
-            pTube->tubeStatus = pTube->tubeStatus | TUBE_WAIT;
+
             usleep(10); /* TODO: optimize by setting sleep number to best guess at when data might show up again */
+
+            pTube->bytesMoved = receivingStation.address - receivingStation.firstByte;
+            if (pTube->bytesMoved > 0) {
+                pTube->tubeStatus = pTube->tubeStatus | TUBE_ACTIVE;
+            }
+
+            /* Comfirm lack of buffer update. */
+            if (comedi_poll(pTube->dev, pTube->subdev) == 0){
+                pTube->tubeStatus = pTube->tubeStatus | TUBE_WAIT; /* If no buffer, set WAIT status flag HIGH */
+            }
+            else
+            {
+                pTube->tubeStatus = pTube->tubeStatus & ~(TUBE_WAIT); /* If buffer, set WAIT status flag LOW */
+            }
         }
         else if (pause_after < sendingStation.lastByte) /* Confirm COMEDI ring buffer has not aliased */
         {
-            pTube->tubeStatus = pTube->tubeStatus ^ TUBE_WAIT; /* Reset wait status - if sample rate is high, this line may be commented out to speed */
             do {
                 *((CARRIER *)receivingStation.address++) = *((CARRIER *)sendingStation.address++);
             } while(sendingStation.address <= pause_after);
         }
         else if (pause_after >= sendingStation.lastByte) /* COMEDI ring buffer has aliased... copy up to end of ring buffer and reset */
         {
-            pTube->tubeStatus = pTube->tubeStatus ^ TUBE_WAIT; /* Reset wait status */
             do {
                 *((CARRIER *)receivingStation.address++) = *((CARRIER *)sendingStation.address++);
             } while(sendingStation.address <= sendingStation.lastByte);
