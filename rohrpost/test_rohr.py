@@ -159,13 +159,14 @@ if(1):
     pTube.contents.dest = temp.fileno()
     laytube_toFile(pTube)
 
-   
     subdev_flags = comedi_get_subdevice_flags(dev, options.subdevice)
 
-#    while not(pTube.contents.tubeStatus & 0x004 ):
-#        time.sleep(1)
 
-    time.sleep(150)
+    while (pTube.contents.bytesMoved < options.n_chan * options.n_scan.value * 2):
+	print bin(pTube.contents.tubeStatus)
+	print pTube.contents.bytesMoved
+        time.sleep(2)
+
 
     pTube.contents.tubeCmd = 4
     
