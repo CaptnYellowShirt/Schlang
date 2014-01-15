@@ -163,7 +163,7 @@ void *_laytube_toFile(void *args){
 
         pause_after = sendingStation.firstByte + comedi_get_buffer_contents(pTube->dev, pTube->subdev) - 1;
 
-        if (pause_after < sendingStation.address){
+        if (pause_after == sendingStation.address - 1){ /* Condition is met if comedi ring buffer has not been updated */
 
             usleep(10); /* TODO: optimize by setting sleep number to best guess at when data might show up again */
 
@@ -173,13 +173,12 @@ void *_laytube_toFile(void *args){
             }
 
             /* Comfirm lack of buffer update. */
-            /* comedi_poll(pTube->dev, pTube->subdev); */
-            if (sendingStation.firstByte + comedi_get_buffer_contents(pTube->dev, pTube->subdev) - 1 < sendingStation.address){
-                pTube->tubeStatus = pTube->tubeStatus | TUBE_WAIT; /* If no buffer, set WAIT status flag HIGH */
+            if (comedi_poll(pTube->dev, pTube->subdev) > 0){
+                pTube->tubeStatus = pTube->tubeStatus & ~(TUBE_WAIT); /* If buffer, set WAIT status flag LOW */
             }
             else
             {
-                pTube->tubeStatus = pTube->tubeStatus & ~(TUBE_WAIT); /* If buffer, set WAIT status flag LOW */
+                pTube->tubeStatus = pTube->tubeStatus | TUBE_WAIT; /* If no buffer, set WAIT status flag HIGH */
             }
         }
         else if (pause_after < sendingStation.lastByte) /* Confirm COMEDI ring buffer has not aliased */
