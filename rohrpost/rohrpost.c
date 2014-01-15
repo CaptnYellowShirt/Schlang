@@ -51,6 +51,7 @@
          0          - Sucess!
          -1         - Bad COMEDI File Descriptor
          -2         - Bad destiation File Descriptor
+         -3         - Other
 
 */
 
@@ -72,7 +73,7 @@ int laytube_toFile(tubeID *pTube){
 
 
     // Check destition file descriptor
-    pTube->tail = fileno(pTube->dest);
+    pTube->tail = pTube->dest;
 
     file_flags[1] = fcntl(pTube->tail, F_GETFD);
 
@@ -81,108 +82,122 @@ int laytube_toFile(tubeID *pTube){
         return(-2);
     }
 
-    /* Create new thread instance of data handeling process */
+    /* Create new thread instance of data copying process */
     pthread_create(&(pTube->threadNo), NULL, _laytube_toFile, (void *)pTube );
 
-    /* Block laytube_toFile from returning until new pTube is setup */
-    while ( !(pTube->tubeStatus & TUBE_INPLACE)){
+    /* Block laytube_toFile from returning until new pTube is setup or failes */
+    while ( !(pTube->tubeStatus & TUBE_INPLACE) || (pTube->tubeStatus & TUBE_FAILED) ){
         usleep(100);  /* 1/10 sec */
     }
 
-    return(0);
+    if (pTube->tubeStatus & TUBE_FAILED){
+        return(-3);
+    }else{
+        return(0);
+    }
+
 
 }
 
 
 void *_laytube_toFile(void *args){
 
-    int i;
-    int subdev_flags;
-    int overhead;
+    long unsigned int expansion_size;
+    void *pause_after;
     tubeID *pTube;
     rohrStation sendingStation;
     rohrStation receivingStation;
 
     pTube = (tubeID *) args;
 
-    void *dest;
-    int offset;
-
-
 
     /* Populate Station Information */
     sendingStation.stationSize = comedi_get_buffer_size(pTube->dev, pTube->subdev);
-    sendingStation.fd = pTube->mouth;
     receivingStation.stationSize = _file_size(pTube->tail);
-    receivingStation.fd = pTube->tail;
-
-    /* Set size of samples */
-    subdev_flags = comedi_get_subdevice_flags(pTube->dev, pTube->subdev);
-    if (subdev_flags | SDF_LSAMPL){
-        sendingStation.packageSize = sizeof(lsampl_t);
-    }else{
-        sendingStation.packageSize = sizeof(sampl_t);
-    }
-    receivingStation.packageSize = sendingStation.packageSize;
-
-
-    /* Set up memory maps */
-    sendingStation.address = mmap(NULL, sendingStation.stationSize, PROT_READ, MAP_PRIVATE, pTube->mouth, 0);
-    if (sendingStation.address == MAP_FAILED){
+    expansion_size = 64 * sysconf(_SC_PAGESIZE); /* Set file expansion size to a mulitple of memory page size */
+    if (expansion_size < sendingStation.stationSize){
+        pTube->tubeStatus = pTube->tubeStatus | TUBE_FAILED;
         pthread_exit(NULL);
     }
 
-    receivingStation.address = mmap(NULL, receivingStation.stationSize, PROT_WRITE, MAP_SHARED | MAP_HUGETLB, pTube->tail, 0);
-    if (receivingStation.address == MAP_FAILED){
+    /* Check for empty file */
+    if (receivingStation.stationSize < 1){
+        receivingStation.stationSize = expansion_size; /*  Let's make the file one page-size in length */
+        ftruncate(pTube->tail, receivingStation.stationSize);
+    }
+
+    /* Set up COMEDI ring buffer memory map */
+    sendingStation.firstByte = mmap(NULL, sendingStation.stationSize, PROT_READ, MAP_SHARED, pTube->mouth, 0);
+    if (sendingStation.firstByte == MAP_FAILED){
+        pTube->tubeStatus = pTube->tubeStatus | TUBE_FAILED;
         pthread_exit(NULL);
     }
+    sendingStation.address = sendingStation.firstByte;
+    sendingStation.lastByte = sendingStation.firstByte + sendingStation.stationSize - 1; /* Last valid byte */
+
+    /* Set up HDD file memory map */
+    receivingStation.firstByte = mmap(NULL, receivingStation.stationSize, PROT_WRITE | MAP_HUGETLB, MAP_SHARED, pTube->tail, 0);
+    if (receivingStation.firstByte == MAP_FAILED){
+        pTube->tubeStatus = pTube->tubeStatus | TUBE_FAILED;
+        pthread_exit(NULL);
+    }
+    receivingStation.address = receivingStation.firstByte;
+    receivingStation.lastByte = receivingStation.firstByte + receivingStation.stationSize - 1; /* Last valid byte */
 
 
     /* Stations are setup... set status and command flags... */
-    sendingStation.lastSent = 0;
-    sendingStation.tobeSent = 0;
     pTube->tubeCmd = 0x00;
     pTube->tubeStatus = TUBE_INPLACE; /* <-- un-blocks laytube_toFile to return to calling function */
 
+    /* Core algorithm - This while loop handles the data transfer from ring buffer to disk */
+    while( !(pTube->tubeCmd & TUBE_STOP) ){
 
+        /* Check if the storage file is out or about to be out of space */
+        if (sendingStation.stationSize >= (receivingStation.lastByte - receivingStation.address) ){
+           if (_growStation(&receivingStation, pTube->tail, expansion_size) == -1){
+                pTube->tubeStatus = pTube->tubeStatus | TUBE_FAILED;
+                pthread_exit(NULL);
+           }
+        }
 
-    while( !(pTube->tubeCmd & TUBE_STOP )){
+        pause_after = sendingStation.firstByte + comedi_get_buffer_contents(pTube->dev, pTube->subdev) - 1;
 
-        sendingStation.tobeSent += comedi_get_buffer_contents(pTube->dev, pTube->subdev); /* bytes */
-
-        /* If toBeSent is the same number as lastSent then no data is ready for pick up ... rest */
-        if (sendingStation.tobeSent == sendingStation.lastSent){
+        if (pause_after < sendingStation.address){
+            pTube->bytesMoved = receivingStation.address - receivingStation.firstByte;
+            /* comedi_poll(pTube->dev, pTube->subdev)); */
             usleep(10); /* TODO: optimize by setting sleep number to best guess at when data might show up again */
-            /* do other stuff like update pTube status */
         }
-        else /* Assume fresh data is in ring buffer... */
+        else if (pause_after < sendingStation.lastByte) /* Confirm COMEDI ring buffer has not aliased */
         {
-            overhead = receivingStation.stationSize - sendingStation.lastSent + sendingStation.tobeSent;
-            if (overhead <= 0){
-                if (_growStation(&receivingStation, 65536)){
-                    /* Error checking */
-                }
-            }
-
-            dest = receivingStation.address + sendingStation.lastSent;
-
-            /* Mem Copy ... */
-            for (i = 1; i > sendingStation.tobeSent; i++ ){
-                offset = (sendingStation.lastSent + i) % sendingStation.packageSize;
-                *(char *)(dest + i) = *(char *)(sendingStation.address + offset );
-            }
-
-            /* Update station status */
-
+            do {
+                *((CARRIER *)receivingStation.address++) = *((CARRIER *)sendingStation.address++);
+            } while(sendingStation.address <= pause_after);
         }
+        else if (pause_after >= sendingStation.lastByte) /* COMEDI ring buffer has aliased... copy up to end of ring buffer and reset */
+        {
+            do {
+                *((CARRIER *)receivingStation.address++) = *((CARRIER *)sendingStation.address++);
+            } while(sendingStation.address <= sendingStation.lastByte);
 
-
+            comedi_mark_buffer_read(pTube->dev, pTube->subdev, sendingStation.stationSize); /* Reset the ring buffer mark */
+            sendingStation.address = sendingStation.firstByte;
+        }
+        else
+        {
+            pTube->tubeStatus = pTube->tubeStatus | TUBE_FAILED;
+            pthread_exit(0);
+        }
     }
 
-    /* clean up Stations, flush tube, truncate file */
+    /* Clean up Stations, truncate file, flush tube */
+    expansion_size = receivingStation.address - receivingStation.firstByte; /* 'address' should point to one byte past last byte written */
+    ftruncate(pTube->tail, expansion_size);
+    fsync(pTube->tail);
+    pTube->bytesMoved = expansion_size;
+
+    pTube->tubeStatus = pTube->tubeStatus | TUBE_EXIT;
+
     pthread_exit(0);
-
-
 }
 
 
@@ -195,23 +210,26 @@ long unsigned _file_size(int fd){
 }
 
 
-int _growStation(rohrStation *smallStation, int expansion){
+int _growStation(rohrStation *smallStation, int fd, long int expansion){
 
-    int oldSz = smallStation->stationSize;
-    int newSz = oldSz + expansion;
-
+    long int oldSz = smallStation->stationSize;
+    long int newSz = oldSz + expansion;
+    long int offset = smallStation->address - smallStation->firstByte;
 
     /* Expand underlying file ... */
-    if (ftruncate(smallStation->fd, expansion) ){
+    if (ftruncate(fd, newSz) ){
         return -1;
     }
 
     /* ... and memory map */
-    if ((smallStation->address = mremap(smallStation->address, oldSz, newSz, MREMAP_MAYMOVE) )) {
+    smallStation->firstByte = mremap(smallStation->firstByte, oldSz, newSz, MREMAP_MAYMOVE);
+    if (smallStation->firstByte == MAP_FAILED){
         return -1;
     }
 
+    smallStation->address = smallStation->firstByte + offset;
     smallStation->stationSize = newSz;
+    smallStation->lastByte = newSz + smallStation->firstByte - 1;
 
     return 0;
 }

@@ -1,0 +1,3 @@
+#!/bin/bash
+gcc -O2 -c -Wall -fPIC rohrpost.c
+gcc -shared -lm -lcomedi -o librohrpost.so rohrpost.o
