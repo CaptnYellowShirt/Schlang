@@ -5,6 +5,8 @@ from ctypes import *
 from schlang import *
 import tempfile
 import time
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 class tubeID(Structure):
@@ -112,8 +114,8 @@ if(1):
     options.range = c_int(0)
     options.aref = c_int(AREF_GROUND)
     options.n_chan = c_int(2)
-    options.n_scan = c_int(100)
-    options.freq = c_double(1000.0)
+    options.n_scan = c_int(100000)
+    options.freq = c_double(10000.0)
     
     dev = comedi_open(options.filename)
     if (not bool(dev)):
@@ -148,9 +150,8 @@ if(1):
         comedi_perror("comedi_command")
         exit(1)
 
-
     pTube.contents.dev = dev    
-    temp = tempfile.TemporaryFile(mode='w+b')
+    temp = tempfile.NamedTemporaryFile(mode='w+b')
     pTube.contents.dest = temp.fileno()
     laytube_toFile(pTube)
 
@@ -160,4 +161,21 @@ if(1):
     time.sleep(3)
 
     pTube.contents.tubeCmd = 4
- 
+    
+    # Wait for pTube thread to clean up (truncate storage file, etc)
+    while not(pTube.contents.tubeStatus & 0x010 ):
+        time.sleep(0.1)
+
+    #binary_mask = np.dtype([('chan_0', np.int16), ('chan_1', np.int16)])
+    binary_mask = np.dtype((np.int16,2))
+
+    temp.file.seek(0)
+    data = np.fromfile(temp.file, dtype=binary_mask, count=-1)
+    
+    scaled_data = np.zeros_like(data,dtype=(np.float))
+    
+    _helper = np.vectorize(comedi_to_phys)
+    
+    for channel in range(data.shape[1]):
+        scaled_data[:,channel] = _helper(data[:,channel], range_info[channel], maxdata[channel])
+
