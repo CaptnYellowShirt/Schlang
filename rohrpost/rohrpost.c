@@ -173,7 +173,8 @@ void *_laytube_toFile(void *args){
             }
 
             /* Comfirm lack of buffer update. */
-            if (comedi_poll(pTube->dev, pTube->subdev) == 0){
+            /* comedi_poll(pTube->dev, pTube->subdev); */
+            if (sendingStation.firstByte + comedi_get_buffer_contents(pTube->dev, pTube->subdev) - 1 < sendingStation.address){
                 pTube->tubeStatus = pTube->tubeStatus | TUBE_WAIT; /* If no buffer, set WAIT status flag HIGH */
             }
             else
