@@ -62,7 +62,7 @@ class parsed_options(Structure):
 BUFSZ = 10000
 buf = (c_char * BUFSZ)()
 
-N_CHANS = 256
+N_CHANS = 64
 chanlist = (c_uint * N_CHANS)()
 range_info = ( POINTER( comedi_range ) * N_CHANS)()
 maxdata = (lsampl_t * N_CHANS)()
@@ -110,12 +110,13 @@ if(1):
     
     options.filename = c_char_p("/dev/comedi0")
     options.subdevice = c_int(0)
-    options.channel = c_int(0)
-    options.range = c_int(0)
-    options.aref = c_int(AREF_GROUND)
-    options.n_chan = c_int(2)
-    options.n_scan = c_int(100000)
-    options.freq = c_double(10000.0)
+    options.channel = c_int(11) # first channel
+    options.range = c_int(3) # [-10,10] [-5,5] [-2.5,2.5] [-1.25,1.25] [0,10] [0,5] [0,2.5] [0,1.25]
+    options.aref = c_int(AREF_DIFF)
+    options.n_chan = c_int(2) # num of chans (inc'd first) to use
+    options.n_scan = c_int(100*10**3 * 100) # records per chan 
+    options.freq = c_double((200*10**3) / 2) # sample freq per chan
+    channels = [14, 11]
     
     dev = comedi_open(options.filename)
     if (not bool(dev)):
@@ -125,9 +126,12 @@ if(1):
     comedi_set_global_oor_behavior(COMEDI_OOR_NUMBER)
     
     for i in range(options.n_chan):
-        chanlist[i] = CR_PACK(options.channel + i, options.range, options.aref)
-        range_info[i] = comedi_get_range(dev, options.subdevice, options.channel, options.range)
-        maxdata[i] = comedi_get_maxdata(dev, options.subdevice, options.channel)
+        #chanlist[i] = CR_PACK(options.channel + i, options.range, options.aref)
+        chanlist[i] = CR_PACK(channels[i], options.range, options.aref)
+        #range_info[i] = comedi_get_range(dev, options.subdevice, options.channel, options.range)
+        range_info[i] = comedi_get_range(dev, options.subdevice, channels[i], options.range)
+        #maxdata[i] = comedi_get_maxdata(dev, options.subdevice, options.channel)
+        maxdata[i] = comedi_get_maxdata(dev, options.subdevice, channels[i])
 
     prepare_cmd_lib(dev, options.subdevice, options.n_scan, options.n_chan, c_uint( int( 1e9 / options.freq) ), cmd)
     
@@ -158,7 +162,10 @@ if(1):
    
     subdev_flags = comedi_get_subdevice_flags(dev, options.subdevice)
 
-    time.sleep(3)
+#    while not(pTube.contents.tubeStatus & 0x004 ):
+#        time.sleep(1)
+
+    time.sleep(150)
 
     pTube.contents.tubeCmd = 4
     
@@ -167,7 +174,7 @@ if(1):
         time.sleep(0.1)
 
     #binary_mask = np.dtype([('chan_0', np.int16), ('chan_1', np.int16)])
-    binary_mask = np.dtype((np.int16,2))
+    binary_mask = np.dtype((np.uint16,options.n_chan))
 
     temp.file.seek(0)
     data = np.fromfile(temp.file, dtype=binary_mask, count=-1)
@@ -179,3 +186,7 @@ if(1):
     for channel in range(data.shape[1]):
         scaled_data[:,channel] = _helper(data[:,channel], range_info[channel], maxdata[channel])
 
+
+    plt.rc('axes', color_cycle=['r', 'g', 'b', 'y', 'k'])
+    plt.plot(scaled_data[0:10**3,:])
+    plt.show()
